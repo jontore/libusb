@@ -300,7 +300,7 @@ static usb_device_t **darwin_device_from_service (io_service_t service)
   const int max_retries = 5;
 
   /* The IOCreatePlugInInterfaceForService function might consistently return
-     an "out of resources" error with certain USB devices the first time we run 
+     an "out of resources" error with certain USB devices the first time we run
      it. The reason is still unclear, but retrying fixes the problem */
   for (int count = 0; count < max_retries; count++) {
     kresult = IOCreatePlugInInterfaceForService(service, kIOUSBDeviceUserClientTypeID,
@@ -698,12 +698,26 @@ static enum libusb_error darwin_check_configuration (struct libusb_context *ctx,
   request.bInterfaceProtocol = kIOUSBFindInterfaceDontCare;
   request.bAlternateSetting  = kIOUSBFindInterfaceDontCare;
 
-  kresult = (*(darwin_device))->CreateInterfaceIterator(darwin_device, &request, &interface_iterator);
-  if (kresult != kIOReturnSuccess)
-    return darwin_to_libusb (kresult);
+  const int max_retries = 5;
+  int i = 0;
 
-  /* iterate once */
-  firstInterface = IOIteratorNext(interface_iterator);
+  do {
+    kresult = (*(darwin_device))->CreateInterfaceIterator(darwin_device, &request, &interface_iterator);
+    if(kresult != kIOReturnSuccess ) {
+        IOObjectRelease(interface_iterator);
+        return NULL;
+    }
+    /* iterate once */
+    firstInterface = IOIteratorNext(interface_iterator);
+
+    usbi_dbg ("get config get interface retry : %s", darwin_error_str (kresult));
+
+    if (firstInterface == 0) {
+      /* sleep for a little while before trying again */
+      nanosleep(&(struct timespec){.tv_sec = 1, .tv_nsec = 0}, NULL);
+      ++i;
+    }
+  } while(i < max_retries && firstInterface == 0 );
 
   /* done with the interface iterator */
   IOObjectRelease(interface_iterator);
@@ -721,7 +735,7 @@ static enum libusb_error darwin_check_configuration (struct libusb_context *ctx,
   } else
     /* not configured */
     dev->active_config = 0;
-  
+
   usbi_dbg ("active config: %u, first config: %u", dev->active_config, dev->first_config);
 
   return LIBUSB_SUCCESS;
